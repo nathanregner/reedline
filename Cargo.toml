@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 name = "reedline"
 repository = "https://github.com/nushell/reedline"
-rust-version = "1.63.0"
+rust-version = "1.65.0"
 version = "0.40.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -14,11 +14,11 @@ doctest = true
 
 [dependencies]
 arboard = { version = "3.3.0", optional = true, default-features = false, features = [
-    "wayland-data-control",
+  "wayland-data-control",
 ] }
 chrono = { version = "0.4.19", default-features = false, features = [
-    "clock",
-    "serde",
+  "clock",
+  "serde",
 ] }
 crossbeam = { version = "0.8.2", optional = true }
 crossterm = { version = "0.28.1", features = ["serde"] }
@@ -40,6 +40,7 @@ gethostname = "0.4.0"
 pretty_assertions = "1.4.0"
 rstest = { version = "0.23.0", default-features = false }
 tempfile = "3.3.0"
+winnow = "0.7.10"
 
 [features]
 bashisms = []

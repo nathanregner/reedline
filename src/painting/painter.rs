@@ -48,7 +48,7 @@ fn skip_buffer_lines(string: &str, skip: usize, offset: Option<usize>) -> &str {
 }
 
 /// the type used by crossterm operations
-pub type W = std::io::BufWriter<std::io::Stderr>;
+pub type W = std::io::BufWriter<Box<dyn Write + Send>>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PainterSuspendedState {

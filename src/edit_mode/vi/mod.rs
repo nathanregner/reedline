@@ -1,6 +1,7 @@
 mod command;
 mod motion;
 mod parser;
+mod text_object;
 mod vi_keybindings;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};

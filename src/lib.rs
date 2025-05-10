@@ -226,6 +226,7 @@
 #![warn(missing_docs)]
 // #![deny(warnings)]
 mod core_editor;
+mod input;
 pub use core_editor::Editor;
 pub use core_editor::LineBuffer;
 

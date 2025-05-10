@@ -1,9 +1,13 @@
-use std::path::PathBuf;
+use std::{io::BufWriter, path::PathBuf};
 
 use itertools::Itertools;
 use nu_ansi_term::{Color, Style};
 
-use crate::{enums::ReedlineRawEvent, CursorConfig};
+use crate::{
+    enums::ReedlineRawEvent,
+    input::{CrosstermInput, Input},
+    CursorConfig,
+};
 #[cfg(feature = "bashisms")]
 use crate::{
     history::SearchFilter,
@@ -27,7 +31,7 @@ use {
             FileBackedHistory, History, HistoryCursor, HistoryItem, HistoryItemId,
             HistoryNavigationQuery, HistorySessionId, SearchDirection, SearchQuery,
         },
-        painting::{Painter, PainterSuspendedState, PromptLines},
+        painting::{Painter, PainterSuspendedState, PromptLines, W},
         prompt::{PromptEditMode, PromptHistorySearchStatus},
         result::{ReedlineError, ReedlineErrorVariants},
         terminal_extensions::{bracketed_paste::BracketedPasteGuard, kitty::KittyProtocolGuard},
@@ -37,7 +41,6 @@ use {
     },
     crossterm::{
         cursor::{SetCursorStyle, Show},
-        event,
         event::{Event, KeyCode, KeyEvent, KeyModifiers},
         terminal, QueueableCommand,
     },
@@ -121,6 +124,9 @@ pub struct Reedline {
     validator: Option<Box<dyn Validator>>,
 
     // Stdout
+    input: Box<dyn Input>,
+
+    // Stdout
     painter: Painter,
 
     transient_prompt: Option<Box<dyn Prompt>>,
@@ -196,8 +202,12 @@ impl Reedline {
     /// Create a new [`Reedline`] engine with a local [`History`] that is not synchronized to a file.
     #[must_use]
     pub fn create() -> Self {
+        Self::create_with(Box::new(CrosstermInput), Box::new(std::io::stderr()))
+    }
+
+    pub(crate) fn create_with(input: Box<dyn Input>, out: Box<dyn Write + Send>) -> Self {
         let history = Box::<FileBackedHistory>::default();
-        let painter = Painter::new(std::io::BufWriter::new(std::io::stderr()));
+        let painter = Painter::new(BufWriter::new(out));
         let buffer_highlighter = Box::<ExampleHighlighter>::default();
         let visual_selection_style = Style::new().on(Color::LightGray);
         let completer = Box::<DefaultCompleter>::default();
@@ -220,6 +230,7 @@ impl Reedline {
             history_cursor_on_excluded: false,
             input_mode: InputMode::Regular,
             suspended_state: None,
+            input,
             painter,
             transient_prompt: None,
             edit_mode,
@@ -738,16 +749,19 @@ impl Reedline {
             // periodically yield so that external printers get a chance to
             // print. Otherwise, we can just block until we receive an event.
             #[cfg(feature = "external_printer")]
-            if event::poll(EXTERNAL_PRINTER_WAIT)? {
-                events.push(crossterm::event::read()?);
+            if let Some(event) = self.input.read_timeout(EXTERNAL_PRINTER_WAIT)? {
+                events.push(event);
             }
             #[cfg(not(feature = "external_printer"))]
-            events.push(crossterm::event::read()?);
+            events.push(self.input.read()?);
 
             // Receive all events in the queue without blocking. Will stop when
             // a line of input is completed.
-            while !completed(&events) && event::poll(Duration::from_millis(0))? {
-                events.push(crossterm::event::read()?);
+            while !completed(&events) {
+                let Some(event) = self.input.read_timeout(Duration::from_millis(0))? else {
+                    break;
+                };
+                events.push(event);
             }
 
             // If we believe there's text pasting or resizing going on, batch
@@ -755,8 +769,11 @@ impl Reedline {
             if events.len() > EVENTS_THRESHOLD
                 || events.iter().any(|e| matches!(e, Event::Resize(_, _)))
             {
-                while !completed(&events) && event::poll(POLL_WAIT)? {
-                    events.push(crossterm::event::read()?);
+                while !completed(&events) {
+                    let Some(event) = self.input.read_timeout(POLL_WAIT)? else {
+                        break;
+                    };
+                    events.push(event);
                 }
             }
 
