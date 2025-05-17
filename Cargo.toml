@@ -36,6 +36,7 @@ unicode-segmentation = "1.9.0"
 unicode-width = "0.2"
 
 [dev-dependencies]
+anyhow = "1.0.98"
 gethostname = "0.4.0"
 pretty_assertions = "1.4.0"
 rstest = { version = "0.23.0", default-features = false }

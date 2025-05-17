@@ -29,17 +29,15 @@ impl Input for CrosstermInput {
 mod test {
     use std::{
         ops::BitOr,
-        sync::mpsc::{Receiver, RecvTimeoutError, Sender},
+        sync::mpsc::{self, channel, Receiver, RecvTimeoutError, Sender},
     };
 
     use super::*;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use itertools::Itertools;
     use winnow::{
-        ascii::{alpha1, escaped_transform},
         combinator::{alt, delimited, dispatch, empty, fail, not, preceded, repeat, terminated},
-        token::{any, none_of, take},
+        token::{none_of, take},
         ModalResult, Parser,
     };
 
@@ -63,67 +61,77 @@ mod test {
         }
     }
 
-    pub struct TestReader {
-        tx: Sender<TestEvent>,
-        rx: Receiver<TestEvent>,
+    pub fn new_test_sender() -> (EventSender, Box<dyn Input>) {
+        let (tx, rx) = channel();
+        (EventSender(tx), Box::new(rx))
     }
 
-    impl TestReader {}
-
-    enum TestEvent {}
+    enum TestEvent {
+        KeyEvent(KeyEvent),
+    }
 
     impl From<TestEvent> for crossterm::event::Event {
         fn from(value: TestEvent) -> Self {
-            todo!()
+            match value {
+                TestEvent::KeyEvent(key_event) => crossterm::event::Event::Key(key_event),
+            }
         }
     }
 
-    struct EventSender(Sender<TestEvent>);
+    pub struct EventSender(Sender<TestEvent>);
 
     impl EventSender {
-        pub fn send_keys(&self, seq: &str) -> io::Result<()> {
+        pub fn send_keys(&self, seq: &str) -> anyhow::Result<()> {
+            let events = key_events
+                .parse(seq)
+                .map_err(|err| anyhow::anyhow!("ParseError:\n{}", err))?;
+            for event in events {
+                self.0.send(TestEvent::KeyEvent(event))?; // TODO
+            }
+
             Ok(())
         }
     }
 
+    fn modifiers(s: &mut &str) -> ModalResult<KeyModifiers> {
+        let modifier = dispatch! {take(2usize);
+            "C-" => empty.value(KeyModifiers::CONTROL),
+            "S-" => empty.value(KeyModifiers::SHIFT),
+            "M-" => empty.value(KeyModifiers::META),
+            "A-" => empty.value(KeyModifiers::ALT),
+            _ => fail
+        };
+        repeat(1.., modifier)
+            .fold(KeyModifiers::empty, BitOr::bitor)
+            .parse_next(s)
+    }
+
+    // TODO: handle <INVALID>, etc.
+    fn char_code(s: &mut &str) -> ModalResult<KeyCode> {
+        alt((preceded('\\', alt(('\\', '<', '>'))), none_of(['\\', '<'])))
+            .map(KeyCode::Char)
+            .parse_next(s)
+    }
+
+    fn special_code(s: &mut &str) -> ModalResult<KeyCode> {
+        alt(("ESC".value(KeyCode::Esc), "CR".value(KeyCode::Enter))).parse_next(s)
+    }
+
+    fn key_events(s: &mut &str) -> ModalResult<Vec<KeyEvent>> {
+        repeat(
+            0..,
+            alt((
+                delimited('<', (modifiers, alt((special_code, char_code))), '>')
+                    .map(|(modifiers, code)| KeyEvent::new(code, modifiers)),
+                alt((char_code, delimited('<', special_code, '>')))
+                    .map(|code| KeyEvent::new(code, KeyModifiers::empty())),
+            )),
+        )
+        .parse_next(s)
+    }
+
     #[test]
     fn parse_key_seq() {
-        fn modifiers(s: &mut &str) -> ModalResult<KeyModifiers> {
-            let modifier = dispatch! {take(2usize);
-                "C-" => empty.value(KeyModifiers::CONTROL),
-                "S-" => empty.value(KeyModifiers::SHIFT),
-                "M-" => empty.value(KeyModifiers::META),
-                "A-" => empty.value(KeyModifiers::ALT),
-                _ => fail
-            };
-            repeat(1.., modifier)
-                .fold(KeyModifiers::empty, BitOr::bitor)
-                .parse_next(s)
-        }
-
-        fn char_code(s: &mut &str) -> ModalResult<KeyCode> {
-            alt((preceded('\\', alt(('\\', '<', '>'))), none_of('\\')))
-                .map(KeyCode::Char)
-                .parse_next(s)
-        }
-
-        fn special_code(s: &mut &str) -> ModalResult<KeyCode> {
-            alt(("ESC".value(KeyCode::Esc), "CR".value(KeyCode::Enter))).parse_next(s)
-        }
-
-        fn key_events(s: &mut &str) -> ModalResult<Vec<KeyEvent>> {
-            repeat(
-                0..,
-                alt((
-                    delimited('<', (modifiers, alt((special_code, char_code))), '>')
-                        .map(|(modifiers, code)| KeyEvent::new(code, modifiers)),
-                    alt((delimited('<', special_code, '>'), char_code))
-                        .map(|code| KeyEvent::new(code, KeyModifiers::empty())),
-                )),
-            )
-            .parse_next(s)
-        }
-
         use KeyCode::{Char, Enter, Esc};
         // println!("{:#?}", key_events.parse("<ESC>").unwrap());
         pretty_assertions::assert_eq!(
@@ -146,42 +154,53 @@ mod test {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use std::sync::Mutex;
-//     use std::{io::Write, sync::Arc};
-//
-//     use crate::input::test::TestReader;
-//     use crate::Reedline;
-//
-//     #[test]
-//     fn feature() {
-//         let w = TestWriter::default();
-//         let reedline = Reedline::create_with(Box::new(TestReader::new()), Box::new(w.clone()));
-//         reedline.read_line("ls");
-//         println!("output {}", w.as_string());
-//     }
-//
-//     #[derive(Clone, Default)]
-//     struct TestWriter(Arc<Mutex<Vec<u8>>>);
-//
-//     impl TestWriter {
-//         fn as_string(&self) -> String {
-//             let guard = self.0.lock().unwrap();
-//             String::from_utf8_lossy(&guard).to_string()
-//         }
-//     }
-//
-//     impl Write for TestWriter {
-//         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-//             let mut guard = self.0.lock().unwrap();
-//             guard.write(buf)
-//         }
-//
-//         fn flush(&mut self) -> io::Result<()> {
-//             let mut guard = self.0.lock().unwrap();
-//             guard.flush()
-//         }
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+    use std::sync::Mutex;
+    use std::{io::Write, sync::Arc};
+
+    use crate::input::test::new_test_sender;
+    use crate::{DefaultPrompt, DefaultPromptSegment, EditMode, Prompt, Reedline, Vi};
+
+    #[test]
+    fn feature() -> anyhow::Result<()> {
+        let w = TestWriter::default();
+        let p = DefaultPrompt::new(DefaultPromptSegment::Empty, DefaultPromptSegment::Empty);
+        let (tx, rx) = new_test_sender();
+        println!("creating");
+        let mut reedline = Reedline::create_with(rx, Box::new(w.clone()))
+            .with_edit_mode(Box::new(Vi::default()))
+            .with_ansi_colors(false);
+        println!("sending");
+        tx.send_keys("lls<ESC>^x<ESC><CR>").unwrap();
+        println!("reading");
+        reedline.read_line(&p)?;
+        println!("output {}", w.as_string());
+        assert_eq!(w.as_string(), ": ls");
+        Ok(())
+    }
+
+    #[derive(Clone, Default)]
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl TestWriter {
+        fn as_string(&self) -> String {
+            let guard = self.0.lock().unwrap();
+            String::from_utf8_lossy(&guard).to_string()
+        }
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut guard = self.0.lock().unwrap();
+            guard.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            let mut guard = self.0.lock().unwrap();
+            guard.flush()
+        }
+    }
+}
