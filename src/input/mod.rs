@@ -37,8 +37,9 @@ mod test {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use itertools::Itertools;
     use winnow::{
-        combinator::{alt, delimited, dispatch, empty, fail, repeat, terminated},
-        token::{any, take},
+        ascii::{alpha1, escaped_transform},
+        combinator::{alt, delimited, dispatch, empty, fail, not, preceded, repeat, terminated},
+        token::{any, none_of, take},
         ModalResult, Parser,
     };
 
@@ -101,7 +102,9 @@ mod test {
         }
 
         fn char_code(s: &mut &str) -> ModalResult<KeyCode> {
-            any.map(KeyCode::Char).parse_next(s)
+            alt((preceded('\\', alt(('\\', '<', '>'))), none_of('\\')))
+                .map(KeyCode::Char)
+                .parse_next(s)
         }
 
         fn special_code(s: &mut &str) -> ModalResult<KeyCode> {
@@ -124,13 +127,18 @@ mod test {
         use KeyCode::{Char, Enter, Esc};
         // println!("{:#?}", key_events.parse("<ESC>").unwrap());
         pretty_assertions::assert_eq!(
-            key_events.parse("<C-S-C><A-M-ESC>ESC<CR>").unwrap(),
+            key_events
+                .parse("<C-S-C><A-M-ESC>\\<ESC\\>\\\\<CR>")
+                .unwrap(),
             vec![
                 KeyEvent::new(Char('C'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
                 KeyEvent::new(Esc, KeyModifiers::META | KeyModifiers::ALT),
+                KeyEvent::new(Char('<'), KeyModifiers::empty()),
                 KeyEvent::new(Char('E'), KeyModifiers::empty()),
                 KeyEvent::new(Char('S'), KeyModifiers::empty()),
                 KeyEvent::new(Char('C'), KeyModifiers::empty()),
+                KeyEvent::new(Char('>'), KeyModifiers::empty()),
+                KeyEvent::new(Char('\\'), KeyModifiers::empty()),
                 KeyEvent::new(Enter, KeyModifiers::empty()),
             ]
         );
